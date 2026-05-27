@@ -1,42 +1,62 @@
+:root {
+  --team-red: #c8102e;
+  --team-red-dark: #900a20;
+  --team-black: #0b0d12;
+  --team-ink: #22242a;
+  --team-pink: #ffe1ea;
+  --team-pink-strong: #ff8fb2;
+  --team-line: rgba(200,16,46,0.18);
+}
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { margin: 0; font-family: -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif;
-  background: #f0f2f5; color: #222; user-select: none; }
-.header { background: #1565c0; color: #fff; padding: 10px 14px; display: flex;
-  justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 10; }
-.header h1 { font-size: 16px; margin: 0; }
-.btn { padding: 10px 14px; border: none; border-radius: 8px; background: #1976d2;
-  color: #fff; font-size: 15px; font-weight: bold; cursor: pointer; }
-.btn.gray { background: #607d8b; }
-.btn.red  { background: #d32f2f; }
-.btn.green { background: #2e7d32; }
+  background: linear-gradient(180deg, #fff4f7 0%, #f3f4f6 46%, #eef1f5 100%);
+  color: var(--team-ink); user-select: none; }
+.header { background: var(--team-black); color: #fff; padding: 10px 14px; display: flex;
+  justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 10;
+  border-bottom: 3px solid var(--team-red); box-shadow: 0 3px 12px rgba(0,0,0,0.22); }
+.header h1 { font-size: 16px; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.btn { padding: 10px 14px; border: none; border-radius: 999px; background: var(--team-red);
+  color: #fff; font-size: 15px; font-weight: bold; cursor: pointer;
+  box-shadow: 0 2px 0 var(--team-red-dark); }
+.btn.gray { background: #282d36; box-shadow: 0 2px 0 #12151b; }
+.btn.red  { background: #12151b; box-shadow: 0 2px 0 #000; color: #fff; }
+.btn.green { background: linear-gradient(180deg, #e3193b, var(--team-red)); box-shadow: 0 2px 0 var(--team-red-dark); }
 .btn.small { padding: 6px 10px; font-size: 13px; }
 .btn:active { transform: scale(0.96); }
 .container { padding: 12px; max-width: 900px; margin: 0 auto; }
-.card { background: #fff; border-radius: 12px; padding: 12px; margin-bottom: 12px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.card { background: rgba(255,255,255,0.96); border-radius: 8px; padding: 12px; margin-bottom: 12px;
+  border: 1px solid var(--team-line); box-shadow: 0 2px 8px rgba(20,20,20,0.08); }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.card-head h3 { margin: 0; font-size: 15px; color: var(--team-red); }
+.meta { font-size: 12px; color: #666; }
 input, select { padding: 8px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px;
-  width: 100%; }
+  width: 100%; background: #fff; }
+input:focus, select:focus { outline: none; border-color: var(--team-red); box-shadow: 0 0 0 3px var(--team-pink); }
 label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
 
 /* スコアボード */
 .scoreboard { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center;
-  background: #263238; color: #fff; padding: 10px; border-radius: 12px; margin-bottom: 12px; }
+  background: radial-gradient(circle at top, #242833 0%, var(--team-black) 55%);
+  color: #fff; padding: 10px; border-radius: 8px; margin-bottom: 12px;
+  border: 2px solid var(--team-red); }
 .team-name { font-size: 14px; text-align: center; opacity: 0.85; }
-.team-score { font-size: 56px; font-weight: bold; text-align: center; line-height: 1; }
+.team-score { font-size: 56px; font-weight: 900; text-align: center; line-height: 1; color: #fff; text-shadow: 0 2px 0 var(--team-red-dark); }
 .vs { font-size: 14px; opacity: 0.6; }
-.qinfo { text-align: center; font-size: 13px; padding: 6px; background: #455a64; color: #fff;
-  border-radius: 8px; margin-bottom: 12px; }
+.qinfo { text-align: center; font-size: 13px; padding: 6px; background: var(--team-black); color: #fff;
+  border-radius: 999px; margin-bottom: 12px; border: 1px solid var(--team-red); }
 
 /* 選手ボタングリッド */
 .team-block { margin-bottom: 14px; }
-.team-block h3 { margin: 4px 0 8px; font-size: 14px; color: #1565c0; }
+.team-block h3 { margin: 4px 0 8px; font-size: 14px; color: var(--team-red); }
 .player-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
-.player-btn { background: #fff; border: 2px solid #1976d2; border-radius: 10px;
-  padding: 8px 4px; text-align: center; font-size: 13px; cursor: pointer; }
-.player-btn .num { font-size: 22px; font-weight: bold; color: #1976d2; }
+.player-btn { background: #fff; border: 2px solid var(--team-red); border-radius: 14px;
+  padding: 8px 4px; text-align: center; font-size: 13px; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.7); }
+.player-btn .num { font-size: 22px; font-weight: 900; color: var(--team-red); }
 .player-btn .name { font-size: 11px; color: #555; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
-.player-btn.selected { background: #1976d2; }
+.player-btn.selected { background: linear-gradient(180deg, #e3193b, var(--team-red)); border-color: var(--team-red-dark); }
 .player-btn.selected .num, .player-btn.selected .name { color: #fff; }
 
 /* 得点ボタン */
@@ -46,18 +66,17 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
 /* 履歴 */
 .history { max-height: 200px; overflow-y: auto; font-size: 12px; }
 .history div { padding: 4px 6px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
-.history .undo { color: #d32f2f; cursor: pointer; font-weight: bold; }
+.history .undo { color: var(--team-red); cursor: pointer; font-weight: bold; }
 
 /* タブ */
 .tabs { display: flex; background: #fff; border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
 .tabs button { flex: 1; padding: 10px; background: #fff; border: none; font-size: 14px; cursor: pointer; }
-.tabs button.active { background: #1976d2; color: #fff; }
+.tabs button.active { background: var(--team-red); color: #fff; }
 
 /* 試合一覧 */
 .game-row { display: flex; justify-content: space-between; align-items: center;
   padding: 10px; border-bottom: 1px solid #eee; }
 .game-row:last-child { border-bottom: none; }
-.game-row .meta { font-size: 12px; color: #666; }
 
 /* 選手登録 */
 .player-row { display: grid; grid-template-columns: 60px 1fr 80px 30px; gap: 6px;
@@ -71,3 +90,9 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;
   align-items: center; justify-content: center; z-index: 100; }
 .modal { background: #fff; border-radius: 12px; padding: 16px; width: 90%; max-width: 400px; }
+
+@media (max-width: 430px) {
+  .header { padding: 8px 10px; }
+  .header-actions .btn { padding-left: 8px; padding-right: 8px; }
+  .player-grid { grid-template-columns: repeat(4, 1fr); }
+}
