@@ -5,14 +5,50 @@ const PDF_LIB_URL = 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.mi
 const FONTKIT_URL = 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js';
 const OFFICIAL_PDF_URL = 'MINI_scoresheet_20190401.pdf';
 const PDF_FONT_URL = 'NotoSansJP-VF.ttf';
-const DEFAULT_DB = { games: [], currentGameId: null, ownTeam: emptyTeam('') };
+const FIREBASE_SDK_URLS = [
+  'https://www.gstatic.com/firebasejs/12.7.0/firebase-app-compat.js',
+  'https://www.gstatic.com/firebasejs/12.7.0/firebase-auth-compat.js',
+  'https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore-compat.js'
+];
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCdb6bVlFWtjfGH3e0B6ZovZVHhzGrae_s",
+  authDomain: "minibas-score-pwa.firebaseapp.com",
+  projectId: "minibas-score-pwa",
+  storageBucket: "minibas-score-pwa.firebasestorage.app",
+  messagingSenderId: "632948039652",
+  appId: "1:632948039652:web:8573ebc592c0b74fbdf1f1",
+  measurementId: "G-MPDYE77XGV"
+};
+const SYNC_COLLECTION = 'games';
+const CLIENT_KEY = 'minibasClientId_v1';
+const DEFAULT_DB = { games: [], currentGameId: null, ownTeam: emptyTeam(''), sync: { joinCode: '' } };
 const REGULAR_Q_MS = 6 * 60 * 1000;
 const OT_Q_MS = 3 * 60 * 1000;
 let db = JSON.parse(localStorage.getItem(DB_KEY) || 'null') || structuredClone(DEFAULT_DB);
 let xlsxLoadPromise = null;
 let pdfLibLoadPromise = null;
+let firebaseLoadPromise = null;
+let firebaseReady = false;
 let tickTimer = null;
-function save() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+let clientId = localStorage.getItem(CLIENT_KEY);
+if (!clientId) {
+  clientId = uid();
+  localStorage.setItem(CLIENT_KEY, clientId);
+}
+const syncState = {
+  status: '未接続',
+  error: '',
+  activeCode: '',
+  unsub: null,
+  saveTimer: null,
+  applyingRemote: false
+};
+function save() {
+  normalizeDb();
+  saveLocalOnly();
+  queueCloudSave();
+}
+function saveLocalOnly() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 normalizeDb();
 
@@ -33,6 +69,7 @@ function newGame() {
     selected: { team: null, no: null },
     events: [],                   // {id,t,team,no,type:'score'|'miss'|'assist'|'rebound'|'foul'|'play'|'subout'|'to',pts,q,ms}
     timeouts: { A: [0,0,0,0], B: [0,0,0,0] }, // Qごと
+    sync: { enabled: false, code: '', role: '', lastSyncedAt: '' },
   };
 }
 
@@ -45,6 +82,8 @@ function emptyTeam(name) {
 function normalizeDb() {
   if (!Array.isArray(db.games)) db.games = [];
   if (!('currentGameId' in db)) db.currentGameId = null;
+  if (!db.sync) db.sync = { joinCode: '' };
+  db.sync.joinCode = normalizeSyncCode(db.sync.joinCode || '');
   db.ownTeam = normalizeTeam(db.ownTeam, '');
   db.games.forEach(normalizeGame);
 }
@@ -58,6 +97,11 @@ function normalizeGame(g) {
   if (typeof g.clock.running !== 'boolean') g.clock.running = false;
   if (!g.clock.runningQ) g.clock.runningQ = g.quarter || 1;
   if (!Array.isArray(g.events)) g.events = [];
+  if (!g.sync) g.sync = { enabled: false, code: '', role: '', lastSyncedAt: '' };
+  g.sync.enabled = !!g.sync.enabled;
+  g.sync.code = normalizeSyncCode(g.sync.code || '');
+  g.sync.role = g.sync.role || '';
+  g.sync.lastSyncedAt = g.sync.lastSyncedAt || '';
 }
 
 function newClock() {
@@ -93,12 +137,104 @@ function hasOwnTeam() {
     t.players.some(p => p.no || p.name || p.license));
 }
 
+function normalizeSyncCode(code) {
+  return String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+}
+
+function generateSyncCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return code;
+}
+
+function isSyncEnabled(g) {
+  return !!(g?.sync?.enabled && g.sync.code);
+}
+
+function syncStatusText(g) {
+  if (!isSyncEnabled(g)) return '未同期';
+  if (syncState.activeCode === g.sync.code && syncState.status) return syncState.status;
+  return '接続待ち';
+}
+
+function renderHomeSyncCard() {
+  return `
+    <div class="card sync-card">
+      <div class="card-head">
+        <div>
+          <h3>クラウド同期</h3>
+          <div class="meta">PC・スマホ・他の人と同じ試合データを開けます</div>
+        </div>
+        <span class="sync-badge">${esc(syncState.status)}</span>
+      </div>
+      <label>試合コード</label>
+      <div class="sync-row">
+        <input data-act="syncJoinCode" value="${esc(db.sync.joinCode)}" placeholder="例：A7K9Q2">
+        <button class="btn small green" data-act="syncJoinHome">参加</button>
+      </div>
+    </div>`;
+}
+
+function renderSyncCard(g) {
+  const enabled = isSyncEnabled(g);
+  const status = syncStatusText(g);
+  return `
+    <div class="card sync-card">
+      <div class="card-head">
+        <div>
+          <h3>クラウド同期</h3>
+          <div class="meta">${enabled ? 'この試合は同期中です' : '試合コードを作ると、スマホや他の人が参加できます'}</div>
+        </div>
+        <span class="sync-badge">${esc(status)}</span>
+      </div>
+      ${enabled ? `
+        <div class="sync-code">${esc(g.sync.code)}</div>
+        <div class="sync-actions">
+          <button class="btn small" data-act="syncCopy">コードコピー</button>
+          <button class="btn small green" data-act="syncPush">今すぐ保存</button>
+          <button class="btn small gray" data-act="syncStop">同期停止</button>
+        </div>
+      ` : `
+        <label>試合コード</label>
+        <div class="sync-row">
+          <input data-act="syncJoinCode" value="${esc(db.sync.joinCode)}" placeholder="参加するコード">
+          <button class="btn small" data-act="syncJoin">参加</button>
+        </div>
+        <button class="btn green" data-act="syncCreate" style="width:100%;margin-top:8px">この試合の同期コードを作成</button>
+      `}
+      ${syncState.error ? `<div class="sync-error">${esc(syncState.error)}</div>` : ''}
+    </div>`;
+}
+
+function renderSyncStrip(g) {
+  if (isSyncEnabled(g)) {
+    return `<div class="sync-strip">
+      <span>同期コード <b>${esc(g.sync.code)}</b></span>
+      <span>${esc(syncStatusText(g))}</span>
+    </div>`;
+  }
+  return `<div class="sync-strip">
+    <span>この試合は端末保存のみ</span>
+    <button class="btn small green" data-act="syncCreate">同期コード作成</button>
+  </div>`;
+}
+
+function readJoinCodeInput() {
+  const input = document.querySelector('[data-act="syncJoinCode"]');
+  const code = normalizeSyncCode(input?.value || db.sync.joinCode);
+  db.sync.joinCode = code;
+  saveLocalOnly();
+  return code;
+}
+
 // ===== ルーティング =====
 let view = 'home';
 function render() {
   const root = document.getElementById('app');
   const g = currentGame();
   if (g) normalizeGame(g);
+  if (g && isSyncEnabled(g)) connectSyncForGame(g);
   if (view === 'home')   root.innerHTML = renderHome();
   if (view === 'own')    root.innerHTML = renderOwnTeam();
   if (view === 'setup')  root.innerHTML = renderSetup();
@@ -118,7 +254,7 @@ function renderHome() {
       <div>
         <div><b>${esc(g.teams.A.name)} vs ${esc(g.teams.B.name)}</b></div>
         <div class="meta">${g.info.date} ${g.info.tournament || ''}　
-          ${getScore(g,'A')} - ${getScore(g,'B')}</div>
+          ${getScore(g,'A')} - ${getScore(g,'B')}${isSyncEnabled(g) ? `　同期:${esc(g.sync.code)}` : ''}</div>
       </div>
       <div>
         <button class="btn small" data-act="open" data-id="${g.id}">開く</button>
@@ -141,6 +277,7 @@ function renderHome() {
           <button class="btn small" data-act="own">登録・編集</button>
         </div>
       </div>
+      ${renderHomeSyncCard()}
       <div class="card">
         <h3 style="margin-top:0">試合一覧</h3>
         ${rows || '<div style="color:#999;padding:20px;text-align:center">試合がありません</div>'}
@@ -210,6 +347,7 @@ function renderSetup() {
         <label>レフリー2</label><input data-act="info" data-f="referee2" value="${esc(g.info.referee2)}">
         <label>コミッショナー</label><input data-act="info" data-f="commissioner" value="${esc(g.info.commissioner)}">
       </div>
+      ${renderSyncCard(g)}
       ${['A','B'].map(t => `
         <div class="card">
           <div class="card-head">
@@ -262,6 +400,7 @@ function renderPlay() {
       <button class="btn small" data-act="export">出力</button>
     </div>
     <div class="container">
+      ${renderSyncStrip(g)}
       <div class="scoreboard">
         <div><div class="team-name">${esc(g.teams.A.name)}</div>
           <div class="team-score">${getScore(g,'A')}</div></div>
@@ -340,6 +479,7 @@ function renderExport() {
         <p>${esc(g.teams.A.name)} <b>${getScore(g,'A')}</b> - <b>${getScore(g,'B')}</b> ${esc(g.teams.B.name)}</p>
         <p>Q別：${[1,2,3,4].map(q=>`${getScoreByQ(g,'A',q)}-${getScoreByQ(g,'B',q)}`).join(' / ')}</p>
       </div>
+      ${renderSyncCard(g)}
       <div class="card">
         <h3 style="margin-top:0">ファイル出力</h3>
         <p style="font-size:13px;color:#555">
@@ -503,6 +643,251 @@ function scheduleTick() {
   }
 }
 
+function queueCloudSave() {
+  if (syncState.applyingRemote) return;
+  const g = currentGame();
+  if (!isSyncEnabled(g)) return;
+  syncState.status = '保存待ち';
+  syncState.error = '';
+  clearTimeout(syncState.saveTimer);
+  syncState.saveTimer = setTimeout(() => {
+    pushGameToCloud(g).catch(err => {
+      syncState.status = '同期エラー';
+      syncState.error = firebaseErrorMessage(err);
+      render();
+    });
+  }, 500);
+}
+
+async function ensureFirebase(timeoutMs = 15000) {
+  if (firebaseReady && window.firebase?.firestore && window.firebase?.auth) return true;
+  if (!firebaseLoadPromise) {
+    firebaseLoadPromise = (async () => {
+      for (const src of FIREBASE_SDK_URLS) await loadScript(src);
+      if (!window.firebase?.firestore || !window.firebase?.auth) throw new Error('Firebase SDKを読み込めませんでした');
+      if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+      await firebase.auth().signInAnonymously();
+      firebaseReady = true;
+      return true;
+    })().catch(err => {
+      firebaseReady = false;
+      firebaseLoadPromise = null;
+      syncState.status = '接続エラー';
+      syncState.error = firebaseErrorMessage(err);
+      return false;
+    });
+  }
+
+  return Promise.race([
+    firebaseLoadPromise,
+    new Promise(resolve => setTimeout(() => resolve(false), timeoutMs))
+  ]);
+}
+
+function firebaseErrorMessage(err) {
+  const message = err?.message || String(err || '');
+  if (message.includes('auth/operation-not-allowed')) {
+    return 'Firebase Authentication の匿名ログインを有効にしてください';
+  }
+  if (message.includes('Missing or insufficient permissions') || message.includes('permission-denied')) {
+    return 'Firestore のルールで読み書きが許可されていません';
+  }
+  if (message.includes('not-found')) return 'Firestore Database を作成してください';
+  return message || '同期できませんでした';
+}
+
+async function connectSyncForGame(g) {
+  if (!isSyncEnabled(g)) return false;
+  const code = g.sync.code;
+  if (syncState.activeCode === code && (syncState.unsub || syncState.status === '接続中')) return true;
+  disconnectSync(false);
+  syncState.activeCode = code;
+  syncState.status = '接続中';
+  syncState.error = '';
+  const ok = await ensureFirebase();
+  if (!ok) {
+    if (syncState.activeCode === code) syncState.activeCode = '';
+    return false;
+  }
+
+  syncState.unsub = firebase.firestore().collection(SYNC_COLLECTION).doc(code).onSnapshot(snapshot => {
+    if (!snapshot.exists) {
+      syncState.status = 'クラウド未作成';
+      render();
+      return;
+    }
+    if (snapshot.metadata.hasPendingWrites) {
+      syncState.status = '保存中';
+      return;
+    }
+    const data = snapshot.data();
+    syncState.status = '同期済み';
+    syncState.error = '';
+    if (data?.updatedBy === clientId) {
+      render();
+      return;
+    }
+    if (data?.game) applyRemoteGame(data.game, code, false);
+    else render();
+  }, err => {
+    syncState.status = '同期エラー';
+    syncState.error = firebaseErrorMessage(err);
+    render();
+  });
+  return true;
+}
+
+function disconnectSync(clearStatus = true) {
+  if (syncState.unsub) syncState.unsub();
+  syncState.unsub = null;
+  syncState.activeCode = '';
+  clearTimeout(syncState.saveTimer);
+  syncState.saveTimer = null;
+  if (clearStatus) {
+    syncState.status = '未接続';
+    syncState.error = '';
+  }
+}
+
+function cloudGamePayload(g) {
+  const copy = JSON.parse(JSON.stringify(g));
+  copy.selected = { team: null, no: null };
+  copy.sync = {
+    enabled: true,
+    code: g.sync.code,
+    role: g.sync.role || 'member',
+    lastSyncedAt: new Date().toISOString()
+  };
+  if (copy.clock?.running) {
+    const q = copy.clock.runningQ || copy.quarter || 1;
+    copy.clock.elapsedByQ[q] = getQuarterElapsed(g);
+    copy.clock.startedAt = Date.now();
+  }
+  return copy;
+}
+
+async function pushGameToCloud(g, force = false) {
+  if (!isSyncEnabled(g)) return false;
+  if (!force && syncState.applyingRemote) return false;
+  const ok = await connectSyncForGame(g);
+  if (!ok) return false;
+  syncState.status = '保存中';
+  syncState.error = '';
+  const game = cloudGamePayload(g);
+  await firebase.firestore().collection(SYNC_COLLECTION).doc(g.sync.code).set({
+    version: 1,
+    updatedBy: clientId,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    game
+  }, { merge: true });
+  g.sync.lastSyncedAt = game.sync.lastSyncedAt;
+  saveLocalOnly();
+  syncState.status = '同期済み';
+  return true;
+}
+
+async function createSyncForCurrent(g) {
+  if (!g) return false;
+  const ok = await ensureFirebase();
+  if (!ok) {
+    alert(syncState.error || 'Firebaseに接続できませんでした');
+    return false;
+  }
+
+  let code = generateSyncCode();
+  for (let i = 0; i < 5; i++) {
+    const existing = await firebase.firestore().collection(SYNC_COLLECTION).doc(code).get();
+    if (!existing.exists) break;
+    code = generateSyncCode();
+  }
+  g.sync = { enabled: true, code, role: 'host', lastSyncedAt: '' };
+  db.sync.joinCode = code;
+  saveLocalOnly();
+  await pushGameToCloud(g, true);
+  alert(`同期コードを作成しました：${code}\nスマホや他の人の端末でこのコードを入力してください。`);
+  return true;
+}
+
+async function joinCurrentGameFromCloud(g, rawCode) {
+  const code = normalizeSyncCode(rawCode);
+  if (!code) {
+    alert('試合コードを入力してください');
+    return false;
+  }
+  const ok = await ensureFirebase();
+  if (!ok) {
+    alert(syncState.error || 'Firebaseに接続できませんでした');
+    return false;
+  }
+
+  const ref = firebase.firestore().collection(SYNC_COLLECTION).doc(code);
+  const snapshot = await ref.get();
+  if (!snapshot.exists) {
+    if (!confirm('このコードの試合はまだありません。この端末の試合をクラウドに作成しますか？')) return false;
+    g.sync = { enabled: true, code, role: 'host', lastSyncedAt: '' };
+    db.sync.joinCode = code;
+    saveLocalOnly();
+    await pushGameToCloud(g, true);
+    return true;
+  }
+
+  if (!confirm('クラウド上の試合データで、この端末の開いている試合を置き換えますか？')) return false;
+  applyRemoteGame(snapshot.data().game, code, true);
+  await connectSyncForGame(currentGame());
+  return true;
+}
+
+async function joinGameFromHome(rawCode) {
+  const code = normalizeSyncCode(rawCode);
+  if (!code) {
+    alert('試合コードを入力してください');
+    return false;
+  }
+  const ok = await ensureFirebase();
+  if (!ok) {
+    alert(syncState.error || 'Firebaseに接続できませんでした');
+    return false;
+  }
+
+  const snapshot = await firebase.firestore().collection(SYNC_COLLECTION).doc(code).get();
+  if (!snapshot.exists || !snapshot.data()?.game) {
+    alert('この試合コードは見つかりませんでした');
+    return false;
+  }
+  db.sync.joinCode = code;
+  applyRemoteGame(snapshot.data().game, code, false);
+  view = 'play';
+  await connectSyncForGame(currentGame());
+  return true;
+}
+
+function applyRemoteGame(remoteGame, code, replaceCurrent) {
+  const incoming = JSON.parse(JSON.stringify(remoteGame));
+  const current = currentGame();
+  const sameIdIdx = db.games.findIndex(game => game.id === incoming.id);
+  const sameCodeIdx = db.games.findIndex(game => game.sync?.code === code);
+  const currentIdx = db.games.findIndex(game => game.id === db.currentGameId);
+  let targetIdx = sameIdIdx >= 0 ? sameIdIdx : sameCodeIdx;
+  if (targetIdx < 0 && replaceCurrent && currentIdx >= 0) targetIdx = currentIdx;
+  const localTarget = targetIdx >= 0 ? db.games[targetIdx] : current;
+  incoming.selected = localTarget?.selected || { team: null, no: null };
+  incoming.sync = {
+    ...(incoming.sync || {}),
+    enabled: true,
+    code,
+    role: localTarget?.sync?.role || 'member',
+    lastSyncedAt: new Date().toISOString()
+  };
+  normalizeGame(incoming);
+  syncState.applyingRemote = true;
+  if (targetIdx >= 0) db.games[targetIdx] = incoming;
+  else db.games.push(incoming);
+  db.currentGameId = incoming.id;
+  saveLocalOnly();
+  syncState.applyingRemote = false;
+  render();
+}
+
 // ===== イベントバインド =====
 function bindEvents() {
   document.querySelectorAll('[data-act]').forEach(el => {
@@ -511,7 +896,7 @@ function bindEvents() {
     if (el.tagName==='INPUT' && el.type==='text') el.addEventListener('blur', handle);
   });
 }
-function handle(e) {
+async function handle(e) {
   const el = e.currentTarget;
   const act = el.dataset.act;
   const g = currentGame();
@@ -528,6 +913,40 @@ function handle(e) {
     case 'setup': view='setup'; break;
     case 'play': view='play'; break;
     case 'export': view='export'; break;
+    case 'syncJoinCode':
+      db.sync.joinCode = normalizeSyncCode(el.value);
+      saveLocalOnly();
+      return;
+    case 'syncCreate':
+      await createSyncForCurrent(g);
+      render();
+      return;
+    case 'syncJoin':
+      await joinCurrentGameFromCloud(g, readJoinCodeInput());
+      render();
+      return;
+    case 'syncJoinHome':
+      await joinGameFromHome(readJoinCodeInput());
+      render();
+      return;
+    case 'syncPush':
+      await pushGameToCloud(g, true);
+      render();
+      return;
+    case 'syncCopy':
+      if (g?.sync?.code) {
+        try { await navigator.clipboard.writeText(g.sync.code); }
+        catch { /* clipboard may be blocked on some browsers */ }
+        alert(`同期コード：${g.sync.code}`);
+      }
+      return;
+    case 'syncStop':
+      if (g && confirm('この端末でクラウド同期を停止しますか？クラウド上の試合データは残ります。')) {
+        g.sync.enabled = false;
+        disconnectSync();
+        save();
+      }
+      break;
 
     case 'info': g.info[el.dataset.f] = el.value; save(); return;
     case 'team': g.teams[el.dataset.t][el.dataset.f] = el.value; save(); return;
@@ -1215,6 +1634,10 @@ function loadScript(src) {
   return new Promise((resolve, reject) => {
     const existing = [...document.scripts].find(s => s.src === src);
     if (existing) {
+      if (existing.dataset.loaded === '1') {
+        resolve();
+        return;
+      }
       existing.addEventListener('load', resolve, { once: true });
       existing.addEventListener('error', reject, { once: true });
       return;
@@ -1222,7 +1645,10 @@ function loadScript(src) {
     const s = document.createElement('script');
     s.src = src;
     s.async = true;
-    s.onload = resolve;
+    s.onload = () => {
+      s.dataset.loaded = '1';
+      resolve();
+    };
     s.onerror = reject;
     document.head.appendChild(s);
   });

@@ -51,6 +51,20 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
 .clock-time { font-size: 28px; line-height: 1; font-weight: 900; color: var(--team-black); }
 .clock-meta { font-size: 11px; color: #666; margin-top: 3px; }
 .clock-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.sync-card .card-head { align-items: flex-start; }
+.sync-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.sync-code { font-size: 30px; line-height: 1; font-weight: 900; letter-spacing: 0;
+  color: var(--team-red); background: var(--team-pink); border: 1px dashed var(--team-red);
+  border-radius: 8px; padding: 10px; text-align: center; margin: 8px 0; }
+.sync-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.sync-badge { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px;
+  border-radius: 999px; background: #111; color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.sync-error { margin-top: 8px; padding: 8px; border-radius: 8px; background: #fff1f3;
+  color: var(--team-red-dark); font-size: 12px; border: 1px solid var(--team-line); }
+.sync-strip { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  margin-bottom: 10px; padding: 8px 10px; border-radius: 999px; background: #fff;
+  border: 1px solid var(--team-line); color: #333; font-size: 12px; }
+.sync-strip b { color: var(--team-red); font-size: 14px; }
 
 /* 選手ボタングリッド */
 .team-block { margin-bottom: 14px; }
@@ -109,5 +123,8 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
   .header-actions .btn { padding-left: 8px; padding-right: 8px; }
   .player-grid { grid-template-columns: repeat(4, 1fr); }
   .stat-bar { grid-template-columns: repeat(3, 1fr); }
+  .sync-actions { grid-template-columns: 1fr; }
+  .sync-strip { border-radius: 8px; align-items: stretch; flex-direction: column; }
+  .sync-strip .btn { width: 100%; }
   .clock-time { font-size: 24px; }
 }
