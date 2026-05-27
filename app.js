@@ -1,9 +1,14 @@
 // ===== データ管理（localStorage、書き込みは数ミリ秒） =====
 const DB_KEY = 'minibasApp_v1';
 const XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
+const PDF_LIB_URL = 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+const FONTKIT_URL = 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js';
+const OFFICIAL_PDF_URL = 'MINI_scoresheet_20190401.pdf';
+const PDF_FONT_URL = 'NotoSansJP-VF.ttf';
 const DEFAULT_DB = { games: [], currentGameId: null, ownTeam: emptyTeam('') };
 let db = JSON.parse(localStorage.getItem(DB_KEY) || 'null') || structuredClone(DEFAULT_DB);
 let xlsxLoadPromise = null;
+let pdfLibLoadPromise = null;
 function save() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 normalizeDb();
@@ -284,9 +289,12 @@ function renderExport() {
       <div class="card">
         <h3 style="margin-top:0">ファイル出力</h3>
         <p style="font-size:13px;color:#555">
-          スコアシートPDF、スコアシート用Excel、<br>
+          公式ミニバススコアシートPDF、スコアシート用Excel、<br>
           ランニングスコアCSVを出力できます。
         </p>
+        <button class="btn green" data-act="officialpdf" style="width:100%;margin-bottom:8px">
+          🏀 公式PDFに書き込んで保存
+        </button>
         <button class="btn green" data-act="pdf" style="width:100%;margin-bottom:8px">
           🏀 PDF用スコアシートを開く
         </button>
@@ -384,6 +392,7 @@ function handle(e) {
     case 'qnext': if (g.quarter<8){g.quarter++; save();} break;
 
     case 'xlsx': exportXlsx(g); return;
+    case 'officialpdf': exportOfficialPdf(g); return;
     case 'pdf':  printScoreSheet(g); return;
     case 'csv':  exportCsv(g);  return;
     case 'json': exportJson(g); return;
@@ -392,6 +401,152 @@ function handle(e) {
 }
 
 function esc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ===== JBAミニバス公式PDFへ書き込み =====
+async function exportOfficialPdf(g) {
+  if (!(await ensurePdfLib())) {
+    alert('PDF出力ライブラリを読み込めませんでした。ネット接続を確認して、もう一度お試しください。');
+    return;
+  }
+
+  try {
+    const { PDFDocument, rgb } = window.PDFLib;
+    const [templateBytes, fontBytes] = await Promise.all([
+      fetch(OFFICIAL_PDF_URL).then(r => {
+        if (!r.ok) throw new Error('official PDF not found');
+        return r.arrayBuffer();
+      }),
+      fetch(PDF_FONT_URL).then(r => {
+        if (!r.ok) throw new Error('Japanese font not found');
+        return r.arrayBuffer();
+      })
+    ]);
+
+    const pdfDoc = await PDFDocument.load(templateBytes, { ignoreEncryption: true });
+    pdfDoc.registerFontkit(window.fontkit);
+    const font = await pdfDoc.embedFont(fontBytes, { subset: true });
+    const page = pdfDoc.getPage(0);
+    const ink = rgb(0.02, 0.02, 0.02);
+    const red = rgb(0.78, 0.06, 0.18);
+
+    const draw = (text, x, y, size=8, maxWidth=90, color=ink) => {
+      const value = fitPdfText(font, String(text ?? ''), size, maxWidth);
+      if (!value) return;
+      page.drawText(value, { x, y, size, font, color });
+    };
+    const center = (text, x, y, width, size=8, color=ink) => {
+      const value = fitPdfText(font, String(text ?? ''), size, width);
+      if (!value) return;
+      const textWidth = font.widthOfTextAtSize(value, size);
+      page.drawText(value, { x: x + Math.max(0, (width - textWidth) / 2), y, size, font, color });
+    };
+
+    // Header
+    draw(g.info.tournament, 58, 770, 8, 230);
+    draw(formatPdfDate(g.info.date), 335, 778, 8, 95);
+    draw(g.info.venue, 335, 762, 8, 110);
+    draw(g.info.gameNo, 500, 758, 8, 58);
+    draw(g.info.referee1, 355, 752, 7, 75);
+    draw(g.info.referee2, 471, 752, 7, 75);
+    draw(g.info.commissioner, 355, 702, 7, 75);
+
+    // Top score strip
+    center(g.teams.A.name, 65, 736, 120, 8);
+    center(g.teams.B.name, 242, 736, 120, 8);
+    center(getScore(g,'A'), 145, 718, 38, 16, red);
+    center(getScore(g,'B'), 225, 718, 38, 16, red);
+    draw(getScore(g,'A') === getScore(g,'B') ? '' :
+      (getScore(g,'A') > getScore(g,'B') ? g.teams.A.name : g.teams.B.name), 416, 49, 8, 150);
+
+    // Team blocks
+    fillOfficialTeam(page, font, draw, center, g, 'A', {
+      name: [55, 654], coach: [58, 374], assistant: [58, 360],
+      rowStart: 586.2, timeoutY: 632
+    });
+    fillOfficialTeam(page, font, draw, center, g, 'B', {
+      name: [55, 329], coach: [58, 49], assistant: [58, 35],
+      rowStart: 261.2, timeoutY: 307
+    });
+
+    fillOfficialRunningScore(page, font, g, ink);
+
+    const pdfBytes = await pdfDoc.save();
+    downloadBlob(pdfBytes, 'application/pdf',
+      `${safeFileName(g.info.date)}_${safeFileName(g.teams.A.name)}_vs_${safeFileName(g.teams.B.name)}_official.pdf`);
+  } catch (err) {
+    console.error(err);
+    alert('公式PDFへの書き込みに失敗しました。PDFテンプレートやネット接続を確認してください。');
+  }
+}
+
+function fillOfficialTeam(page, font, draw, center, g, team, pos) {
+  const t = g.teams[team];
+  const rowGap = 14.17;
+  const ink = window.PDFLib.rgb(0.02, 0.02, 0.02);
+  const red = window.PDFLib.rgb(0.78, 0.06, 0.18);
+
+  draw(t.name, pos.name[0], pos.name[1], 8, 155);
+  draw(t.coach, pos.coach[0], pos.coach[1], 7, 160);
+  draw(t.assistant, pos.assistant[0], pos.assistant[1], 7, 150);
+
+  t.players.slice(0, 15).forEach((p, i) => {
+    const y = pos.rowStart - i * rowGap;
+    center(p.license || '', 29, y, 42, 6.4);
+    draw(p.name || '', 72, y, 7, 92);
+    center(p.no || '', 168, y, 16, 7.2, red);
+
+    const fouls = getPlayerFouls(g, team, p.no);
+    for (let f = 0; f < Math.min(fouls, 5); f++) {
+      center('×', 236 + f * 13.7, y, 10, 7, red);
+    }
+  });
+
+  [0,1,2,3].forEach(i => {
+    const count = g.timeouts[team]?.[i] || 0;
+    if (count) center(String(count), 234 + i * 13.7, pos.timeoutY, 11, 7, ink);
+  });
+}
+
+function fillOfficialRunningScore(page, font, g, color) {
+  const drawSmall = (text, x, y) => page.drawText(String(text), { x, y, size: 5.5, font, color });
+  const coords = (team, score) => {
+    if (score < 1 || score > 120) return null;
+    const group = Math.floor((score - 1) / 40);
+    const row = (score - 1) % 40;
+    const y = 628.5 - row * 14.15;
+    const teamOffset = team === 'A' ? 0 : 15.3;
+    const xs = [391.7, 467.0, 544.0];
+    return { x: xs[group] + teamOffset, y };
+  };
+
+  let sums = { A: 0, B: 0 };
+  g.events.filter(e => e.type === 'score').sort((a,b)=>a.t-b.t).forEach(e => {
+    for (let i = 0; i < e.pts; i++) {
+      sums[e.team] += 1;
+      const p = coords(e.team, sums[e.team]);
+      if (p) drawSmall(e.no || '', p.x, p.y);
+    }
+  });
+}
+
+function fitPdfText(font, text, size, maxWidth) {
+  let value = String(text || '').trim();
+  if (!value) return '';
+  while (font.widthOfTextAtSize(value, size) > maxWidth && value.length > 1) {
+    value = value.slice(0, -1);
+  }
+  return value;
+}
+
+function formatPdfDate(dateText) {
+  const m = String(dateText || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return dateText || '';
+  return `${m[1]}年${m[2]}月${m[3]}日`;
+}
+
+function safeFileName(text) {
+  return String(text || 'score').replace(/[\\/:*?"<>|]/g, '_').trim() || 'score';
+}
 
 // ===== PDF用スコアシート（印刷画面） =====
 function printScoreSheet(g) {
@@ -700,6 +855,38 @@ function ensureXlsx(timeoutMs = 15000) {
     xlsxLoadPromise,
     new Promise(resolve => setTimeout(() => resolve(false), timeoutMs))
   ]);
+}
+
+function ensurePdfLib(timeoutMs = 20000) {
+  if (window.PDFLib && window.fontkit) return Promise.resolve(true);
+  if (!pdfLibLoadPromise) {
+    pdfLibLoadPromise = loadScript(PDF_LIB_URL)
+      .then(() => loadScript(FONTKIT_URL))
+      .then(() => !!(window.PDFLib && window.fontkit))
+      .catch(() => false);
+  }
+
+  return Promise.race([
+    pdfLibLoadPromise,
+    new Promise(resolve => setTimeout(() => resolve(false), timeoutMs))
+  ]);
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = [...document.scripts].find(s => s.src === src);
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
 }
 
 // ===== CSV =====
