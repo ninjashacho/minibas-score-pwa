@@ -27,7 +27,7 @@ function newGame() {
     },
     quarter: 1,                   // 1-4, 5+はOT
     selected: { team: null, no: null },
-    events: [],                   // {id,t,team,no,type:'score'|'foul'|'to',pts,q}
+    events: [],                   // {id,t,team,no,type:'score'|'foul'|'play'|'to',pts,q}
     timeouts: { A: [0,0,0,0], B: [0,0,0,0] }, // Qごと
   };
 }
@@ -216,9 +216,9 @@ function renderPlay() {
 
   const history = g.events.slice(-15).reverse().map(e => {
     const t = g.teams[e.team];
-    const pl = t.players.find(p => p.no===e.no);
-    const name = pl ? `#${pl.no} ${pl.name}` : `#${e.no}`;
-    const label = e.type==='score'? `${e.pts}点` : e.type==='foul'? 'ファウル' : 'T.O.';
+    const pl = e.no ? t.players.find(p => p.no===e.no) : null;
+    const name = e.no ? (pl ? `#${pl.no} ${pl.name}` : `#${e.no}`) : '';
+    const label = e.type==='score'? `${e.pts}点` : e.type==='foul'? 'ファウル' : e.type==='play'? '出場' : 'T.O.';
     return `<div><span>Q${e.q} ${t.name} ${name} ${label}</span>
       <span class="undo" data-act="undo" data-id="${e.id}">取消</span></div>`;
   }).join('');
@@ -258,6 +258,10 @@ function renderPlay() {
           <button class="btn green" data-act="pt" data-p="2">+2</button>
           <button class="btn green" data-act="pt" data-p="3">+3</button>
           <button class="btn red"   data-act="foul">ファウル</button>
+        </div>
+        <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <button class="btn" data-act="playin">出場記録</button>
+          <button class="btn gray" data-act="clearSel">選択解除</button>
         </div>
         <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
           <button class="btn gray" data-act="toA">A タイムアウト (${g.timeouts.A[Math.min(g.quarter-1,3)]||0})</button>
@@ -324,6 +328,17 @@ function getPlayerPoints(g, team, no) {
 function getPlayerFouls(g, team, no) {
   return g.events.filter(e => e.team===team && e.no===no && e.type==='foul').length;
 }
+function getPlayerQuarterSet(g, team, no) {
+  return new Set(g.events
+    .filter(e => e.team===team && e.no===no && e.q<=4 && ['play','score','foul'].includes(e.type))
+    .map(e => e.q));
+}
+function getPlayerFoulEvents(g, team, no) {
+  return g.events.filter(e => e.team===team && e.no===no && e.type==='foul').sort((a,b)=>a.t-b.t);
+}
+function getTeamFoulsByQ(g, team, q) {
+  return g.events.filter(e => e.team===team && e.type==='foul' && e.q===q).length;
+}
 
 // ===== イベントバインド =====
 function bindEvents() {
@@ -373,6 +388,15 @@ function handle(e) {
     case 'ownpl': db.ownTeam.players[+el.dataset.i][el.dataset.f] = el.value; save(); return;
 
     case 'sel': g.selected = { team: el.dataset.t, no: el.dataset.no }; save(); break;
+    case 'clearSel': g.selected = { team: null, no: null }; save(); break;
+    case 'playin':
+      if (!g.selected.no) { alert('先に選手を選んでください'); return; }
+      if (g.quarter > 4) { alert('出場時限は1Q〜4Qに記録します'); return; }
+      if (!g.events.some(x => x.team===g.selected.team && x.no===g.selected.no && x.type==='play' && x.q===g.quarter)) {
+        g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no, type:'play', q:g.quarter});
+        save();
+      }
+      break;
     case 'pt':
       if (!g.selected.no) { alert('先に選手を選んでください'); return; }
       g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no,
@@ -461,11 +485,13 @@ async function exportOfficialPdf(g) {
     // Team blocks
     fillOfficialTeam(page, font, draw, center, g, 'A', {
       name: [55, 654], coach: [58, 374], assistant: [58, 360],
-      rowStart: 586.2, timeoutY: 632
+      rowStart: 586.2, timeoutY: 632,
+      teamFoulY: { 1: 558.1, 2: 558.1, 3: 473.4, 4: 473.4 }
     });
     fillOfficialTeam(page, font, draw, center, g, 'B', {
       name: [55, 329], coach: [58, 49], assistant: [58, 35],
-      rowStart: 261.2, timeoutY: 307
+      rowStart: 261.2, timeoutY: 307,
+      teamFoulY: { 1: 232.9, 2: 232.9, 3: 148.2, 4: 148.2 }
     });
 
     fillOfficialRunningScore(page, font, g, ink);
@@ -484,6 +510,8 @@ function fillOfficialTeam(page, font, draw, center, g, team, pos) {
   const rowGap = 14.17;
   const ink = window.PDFLib.rgb(0.02, 0.02, 0.02);
   const red = window.PDFLib.rgb(0.78, 0.06, 0.18);
+  const playXs = [183.5, 197.2, 210.9, 224.6];
+  const foulXs = [238.5, 252.2, 265.9, 279.6, 293.3];
 
   draw(t.name, pos.name[0], pos.name[1], 8, 155);
   draw(t.coach, pos.coach[0], pos.coach[1], 7, 160);
@@ -491,13 +519,28 @@ function fillOfficialTeam(page, font, draw, center, g, team, pos) {
 
   t.players.slice(0, 15).forEach((p, i) => {
     const y = pos.rowStart - i * rowGap;
+    const quarters = getPlayerQuarterSet(g, team, p.no);
     center(p.license || '', 29, y, 42, 6.4);
-    draw(p.name || '', 72, y, 7, 92);
+    draw(p.name || '', 72, y, 6.8, 92);
     center(p.no || '', 168, y, 16, 7.2, red);
 
-    const fouls = getPlayerFouls(g, team, p.no);
-    for (let f = 0; f < Math.min(fouls, 5); f++) {
-      center('×', 236 + f * 13.7, y, 10, 7, red);
+    [1,2,3,4].forEach((q, qIndex) => {
+      if (quarters.has(q)) drawDiagonal(page, playXs[qIndex], y + 0.6, 8, 8, quarterInk(q));
+    });
+
+    getPlayerFoulEvents(g, team, p.no).slice(0, 5).forEach((foul, fIndex) => {
+      const color = quarterInk(foul.q);
+      page.drawText('P', { x: foulXs[fIndex] + 2.4, y, size: 6.8, font, color });
+      if (foul.q) page.drawText(String(foul.q), { x: foulXs[fIndex] + 7.4, y: y - 0.2, size: 4.2, font, color });
+    });
+  });
+
+  [1,2,3,4].forEach(q => {
+    const count = Math.min(getTeamFoulsByQ(g, team, q), 4);
+    const x = q === 1 || q === 3 ? 323.5 : 338.8;
+    const startY = pos.teamFoulY[q] ?? 0;
+    for (let i = 0; i < count; i++) {
+      drawDiagonal(page, x, startY - i * rowGap, 8, 8, quarterInk(q));
     }
   });
 
@@ -508,25 +551,91 @@ function fillOfficialTeam(page, font, draw, center, g, team, pos) {
 }
 
 function fillOfficialRunningScore(page, font, g, color) {
-  const drawSmall = (text, x, y) => page.drawText(String(text), { x, y, size: 5.5, font, color });
+  const marks = [];
   const coords = (team, score) => {
     if (score < 1 || score > 120) return null;
     const group = Math.floor((score - 1) / 40);
     const row = (score - 1) % 40;
     const y = 628.5 - row * 14.15;
-    const teamOffset = team === 'A' ? 0 : 15.3;
-    const xs = [391.7, 467.0, 544.0];
-    return { x: xs[group] + teamOffset, y };
+    const scoreXs = team === 'A' ? [385.4, 460.6, 537.4] : [400.8, 475.9, 552.7];
+    const scoreX = scoreXs[group];
+    return {
+      score,
+      scoreX,
+      playerX: scoreX + (team === 'A' ? -13.8 : 15.1),
+      y
+    };
+  };
+  const centerSmall = (text, x, y, width, drawColor) => {
+    const value = String(text ?? '');
+    if (!value) return;
+    const size = 5.8;
+    const textWidth = font.widthOfTextAtSize(value, size);
+    page.drawText(value, { x: x + Math.max(0, (width - textWidth) / 2), y, size, font, color: drawColor });
   };
 
   let sums = { A: 0, B: 0 };
   g.events.filter(e => e.type === 'score').sort((a,b)=>a.t-b.t).forEach(e => {
-    for (let i = 0; i < e.pts; i++) {
-      sums[e.team] += 1;
-      const p = coords(e.team, sums[e.team]);
-      if (p) drawSmall(e.no || '', p.x, p.y);
+    sums[e.team] += e.pts;
+    const p = coords(e.team, sums[e.team]);
+    if (!p) return;
+    const drawColor = quarterInk(e.q);
+
+    centerSmall(e.no || '', p.playerX, p.y, 12, drawColor);
+    if (e.pts === 1) {
+      page.drawEllipse({ x: p.scoreX + 3.7, y: p.y + 5.4, xScale: 2.4, yScale: 2.4, color: drawColor });
+    } else {
+      drawDiagonal(page, p.scoreX - 1.2, p.y - 0.8, 10.4, 9.2, drawColor);
+      if (e.pts === 3) {
+        page.drawEllipse({ x: p.playerX + 6.0, y: p.y + 3.1, xScale: 6.0, yScale: 4.5, borderColor: drawColor, borderWidth: 0.8 });
+      }
     }
+    marks.push({...p, q:e.q, color:drawColor});
   });
+
+  const lastByQ = new Map();
+  marks.forEach(mark => lastByQ.set(mark.q, mark));
+  lastByQ.forEach(mark => markOfficialPeriodEnd(page, mark, false));
+  if (marks.length) markOfficialPeriodEnd(page, marks[marks.length - 1], true);
+}
+
+function quarterInk(q) {
+  return (q === 1 || q === 3) ? window.PDFLib.rgb(0.78, 0.06, 0.18) : window.PDFLib.rgb(0.02, 0.02, 0.02);
+}
+
+function drawDiagonal(page, x, y, width, height, color, thickness=0.8) {
+  page.drawLine({
+    start: { x, y },
+    end: { x: x + width, y: y + height },
+    thickness,
+    color
+  });
+}
+
+function markOfficialPeriodEnd(page, mark, isFinal) {
+  page.drawEllipse({
+    x: mark.scoreX + 3.8,
+    y: mark.y + 3.2,
+    xScale: 6.0,
+    yScale: 4.8,
+    borderColor: mark.color,
+    borderWidth: isFinal ? 1.4 : 0.9
+  });
+  const y1 = mark.y - 2.3;
+  page.drawLine({
+    start: { x: mark.playerX - 1.0, y: y1 },
+    end: { x: mark.scoreX + 11.0, y: y1 },
+    thickness: isFinal ? 1.2 : 0.8,
+    color: mark.color
+  });
+  if (isFinal) {
+    page.drawLine({
+      start: { x: mark.playerX - 1.0, y: y1 - 2.0 },
+      end: { x: mark.scoreX + 11.0, y: y1 - 2.0 },
+      thickness: 1.2,
+      color: mark.color
+    });
+  }
 }
 
 function fitPdfText(font, text, size, maxWidth) {
