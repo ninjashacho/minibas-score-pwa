@@ -284,9 +284,12 @@ function renderExport() {
       <div class="card">
         <h3 style="margin-top:0">ファイル出力</h3>
         <p style="font-size:13px;color:#555">
-          スコアシート用Excel（JBA公式テンプレートに準拠したレイアウト）と、<br>
+          スコアシートPDF、スコアシート用Excel、<br>
           ランニングスコアCSVを出力できます。
         </p>
+        <button class="btn green" data-act="pdf" style="width:100%;margin-bottom:8px">
+          🏀 PDF用スコアシートを開く
+        </button>
         <button class="btn green" data-act="xlsx" style="width:100%;margin-bottom:8px">
           📊 スコアシートExcel をダウンロード
         </button>
@@ -381,6 +384,7 @@ function handle(e) {
     case 'qnext': if (g.quarter<8){g.quarter++; save();} break;
 
     case 'xlsx': exportXlsx(g); return;
+    case 'pdf':  printScoreSheet(g); return;
     case 'csv':  exportCsv(g);  return;
     case 'json': exportJson(g); return;
   }
@@ -388,6 +392,208 @@ function handle(e) {
 }
 
 function esc(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ===== PDF用スコアシート（印刷画面） =====
+function printScoreSheet(g) {
+  const w = window.open('', '_blank');
+  if (!w) {
+    alert('PDF用画面を開けませんでした。ポップアップ許可を確認してください。');
+    return;
+  }
+
+  w.document.open();
+  w.document.write(buildScoreSheetHtml(g));
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 500);
+}
+
+function buildScoreSheetHtml(g) {
+  const qScores = [1,2,3,4].map(q => ({
+    q,
+    a: getScoreByQ(g,'A',q),
+    b: getScoreByQ(g,'B',q)
+  }));
+  const otA = g.events.filter(e => e.team==='A' && e.type==='score' && e.q > 4).reduce((s,e)=>s+e.pts, 0);
+  const otB = g.events.filter(e => e.team==='B' && e.type==='score' && e.q > 4).reduce((s,e)=>s+e.pts, 0);
+
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(g.info.date)}_${esc(g.teams.A.name)}_vs_${esc(g.teams.B.name)}_scoresheet</title>
+<style>
+@page { size: A4 landscape; margin: 8mm; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #111; font-family: -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif; background: #fff; }
+.sheet { width: 281mm; min-height: 194mm; margin: 0 auto; padding: 5mm; border: 2px solid #111; background: #fff; }
+.top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 4mm; border-bottom: 2px solid #111; padding-bottom: 3mm; }
+.title { text-align: center; font-size: 18px; font-weight: 900; letter-spacing: 0.02em; }
+.brand { color: #c8102e; font-size: 12px; font-weight: 800; }
+.final { text-align: center; border: 2px solid #111; padding: 2mm 4mm; min-width: 54mm; }
+.final .score { font-size: 30px; line-height: 1; font-weight: 900; }
+.final .teams { font-size: 10px; margin-top: 2mm; }
+.info { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5mm; margin: 3mm 0; font-size: 9px; }
+.field { border: 1px solid #111; min-height: 7mm; display: grid; grid-template-columns: 20mm 1fr; }
+.field span:first-child { background: #f4f4f4; border-right: 1px solid #111; padding: 1.5mm; font-weight: 700; }
+.field span:last-child { padding: 1.5mm; }
+.teams-grid { display: grid; grid-template-columns: 1fr 52mm 1fr; gap: 2.5mm; align-items: start; }
+.team-box { border: 2px solid #111; }
+.team-title { background: #111; color: #fff; padding: 1.5mm 2mm; display: flex; justify-content: space-between; font-weight: 900; }
+.team-title strong { color: #ffb4c4; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { border: 1px solid #111; padding: 1mm; font-size: 8.5px; text-align: center; height: 6.5mm; overflow: hidden; }
+th { background: #f3f3f3; font-weight: 800; }
+td.name { text-align: left; font-size: 8px; }
+.summary { border: 2px solid #111; }
+.summary h2 { margin: 0; padding: 1.5mm; background: #c8102e; color: #fff; font-size: 11px; text-align: center; }
+.summary td, .summary th { height: 7.5mm; font-size: 9px; }
+.win { font-size: 9px; margin-top: 2mm; border: 1px solid #111; padding: 1.5mm; min-height: 10mm; }
+.running { margin-top: 3mm; border: 2px solid #111; }
+.running h2 { margin: 0; background: #111; color: #fff; padding: 1.5mm 2mm; font-size: 11px; }
+.running-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; }
+.running-grid table:first-child { border-right: 2px solid #111; }
+.running td, .running th { height: 5.4mm; font-size: 7.5px; padding: 0.6mm; }
+.sign { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2mm; margin-top: 3mm; font-size: 8px; }
+.sign div { border: 1px solid #111; min-height: 9mm; padding: 1mm; }
+.no-print { position: fixed; right: 12px; top: 12px; display: flex; gap: 8px; }
+.no-print button { border: 0; border-radius: 999px; padding: 10px 14px; color: #fff; background: #c8102e; font-weight: 800; }
+@media print {
+  .no-print { display: none; }
+  .sheet { border-width: 2px; margin: 0; }
+}
+</style>
+</head>
+<body>
+<div class="no-print">
+  <button onclick="window.print()">PDFに保存 / 印刷</button>
+  <button onclick="window.close()" style="background:#111">閉じる</button>
+</div>
+<main class="sheet">
+  <section class="top">
+    <div>
+      <div class="brand">HARUTA HIGASHI MINI BASKETBALL</div>
+      <div style="font-size:9px">Official Score Sheet</div>
+    </div>
+    <div class="title">ミニバスケットボール スコアシート</div>
+    <div class="final">
+      <div class="score">${getScore(g,'A')} - ${getScore(g,'B')}</div>
+      <div class="teams">${esc(g.teams.A.name)}　vs　${esc(g.teams.B.name)}</div>
+    </div>
+  </section>
+
+  <section class="info">
+    ${sheetField('大会名', g.info.tournament)}
+    ${sheetField('試合No', g.info.gameNo)}
+    ${sheetField('日付', g.info.date)}
+    ${sheetField('会場', g.info.venue)}
+    ${sheetField('レフリー1', g.info.referee1)}
+    ${sheetField('レフリー2', g.info.referee2)}
+    ${sheetField('コミッショナー', g.info.commissioner)}
+    ${sheetField('作成時刻', new Date().toLocaleString('ja-JP'))}
+  </section>
+
+  <section class="teams-grid">
+    ${teamSheet(g, 'A')}
+    <aside class="summary">
+      <h2>得点集計</h2>
+      <table>
+        <tr><th></th><th>1Q</th><th>2Q</th><th>3Q</th><th>4Q</th><th>OT</th><th>合計</th></tr>
+        <tr><th>A</th>${qScores.map(x=>`<td>${x.a}</td>`).join('')}<td>${otA}</td><td><b>${getScore(g,'A')}</b></td></tr>
+        <tr><th>B</th>${qScores.map(x=>`<td>${x.b}</td>`).join('')}<td>${otB}</td><td><b>${getScore(g,'B')}</b></td></tr>
+      </table>
+      <h2 style="background:#111">タイムアウト</h2>
+      <table>
+        <tr><th></th><th>1Q</th><th>2Q</th><th>3Q</th><th>4Q/OT</th></tr>
+        <tr><th>A</th>${[0,1,2,3].map(i=>`<td>${g.timeouts.A[i]||0}</td>`).join('')}</tr>
+        <tr><th>B</th>${[0,1,2,3].map(i=>`<td>${g.timeouts.B[i]||0}</td>`).join('')}</tr>
+      </table>
+      <div class="win">勝者<br><b>${getScore(g,'A')===getScore(g,'B') ? '' : esc(getScore(g,'A') > getScore(g,'B') ? g.teams.A.name : g.teams.B.name)}</b></div>
+    </aside>
+    ${teamSheet(g, 'B')}
+  </section>
+
+  ${runningScoreSheet(g)}
+
+  <section class="sign">
+    <div>スコアラー</div>
+    <div>アシスタントスコアラー</div>
+    <div>タイマー</div>
+    <div>ショットクロック</div>
+  </section>
+</main>
+</body>
+</html>`;
+}
+
+function sheetField(label, value) {
+  return `<div class="field"><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
+}
+
+function teamSheet(g, team) {
+  const t = g.teams[team];
+  const rows = Array.from({length: 15}, (_, i) => t.players[i] || { no:'', name:'', license:'' }).map(p => `
+    <tr>
+      <td>${esc(p.no)}</td>
+      <td class="name">${esc(p.name)}</td>
+      <td>${esc(p.license || '')}</td>
+      <td>${p.no ? getPlayerPoints(g,team,p.no) : ''}</td>
+      <td>${p.no ? getPlayerFouls(g,team,p.no) : ''}</td>
+    </tr>`).join('');
+
+  return `<div class="team-box">
+    <div class="team-title"><span>${team}チーム</span><strong>${esc(t.name)}</strong></div>
+    <table>
+      <tr><th style="width:12mm">No</th><th>氏名</th><th style="width:16mm">ID下3</th><th style="width:14mm">得点</th><th style="width:12mm">F</th></tr>
+      ${rows}
+    </table>
+    <table>
+      <tr><th style="width:23mm">HC</th><td class="name">${esc(t.coach)}</td></tr>
+      <tr><th>AC</th><td class="name">${esc(t.assistant)}</td></tr>
+    </table>
+  </div>`;
+}
+
+function runningScoreSheet(g) {
+  let aSum = 0, bSum = 0;
+  const events = g.events.filter(e => e.type==='score').sort((a,b)=>a.t-b.t);
+  const rows = events.map((e, i) => {
+    if (e.team === 'A') aSum += e.pts; else bSum += e.pts;
+    const time = new Date(e.t).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});
+    return {
+      n: i + 1,
+      q: e.q <= 4 ? e.q : `OT${e.q - 4}`,
+      time,
+      aNo: e.team === 'A' ? e.no : '',
+      aPts: e.team === 'A' ? e.pts : '',
+      aSum: e.team === 'A' ? aSum : '',
+      bNo: e.team === 'B' ? e.no : '',
+      bPts: e.team === 'B' ? e.pts : '',
+      bSum: e.team === 'B' ? bSum : ''
+    };
+  });
+
+  while (rows.length < 28) {
+    rows.push({ n: rows.length + 1, q:'', time:'', aNo:'', aPts:'', aSum:'', bNo:'', bPts:'', bSum:'' });
+  }
+
+  const tableRows = (items) => items.map(r => `<tr>
+    <td>${r.n}</td><td>${r.q}</td><td>${r.time}</td>
+    <td>${esc(r.aNo)}</td><td>${r.aPts}</td><td>${r.aSum}</td>
+    <td>${esc(r.bNo)}</td><td>${r.bPts}</td><td>${r.bSum}</td>
+  </tr>`).join('');
+
+  const mid = Math.ceil(rows.length / 2);
+  const head = '<tr><th>No</th><th>Q</th><th>時刻</th><th>A No</th><th>A点</th><th>A計</th><th>B No</th><th>B点</th><th>B計</th></tr>';
+  return `<section class="running">
+    <h2>ランニングスコア</h2>
+    <div class="running-grid">
+      <table>${head}${tableRows(rows.slice(0, mid))}</table>
+      <table>${head}${tableRows(rows.slice(mid))}</table>
+    </div>
+  </section>`;
+}
 
 // ===== Excel 出力（JBA公式ミニバススコアシートのレイアウトに準拠） =====
 async function exportXlsx(g) {

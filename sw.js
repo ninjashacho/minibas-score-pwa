@@ -1,6 +1,6 @@
-const CACHE = 'minibas-v4';
+const CACHE = 'minibas-v5';
 const XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
-const FILES = ['./','./index.html','./style.css?v=4','./app.js?v=4','./manifest.json'];
+const FILES = ['./','./index.html','./style.css?v=5','./app.js?v=5','./manifest.json'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)));
   self.skipWaiting();
