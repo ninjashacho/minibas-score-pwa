@@ -1,0 +1,73 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body { margin: 0; font-family: -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  background: #f0f2f5; color: #222; user-select: none; }
+.header { background: #1565c0; color: #fff; padding: 10px 14px; display: flex;
+  justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 10; }
+.header h1 { font-size: 16px; margin: 0; }
+.btn { padding: 10px 14px; border: none; border-radius: 8px; background: #1976d2;
+  color: #fff; font-size: 15px; font-weight: bold; cursor: pointer; }
+.btn.gray { background: #607d8b; }
+.btn.red  { background: #d32f2f; }
+.btn.green { background: #2e7d32; }
+.btn.small { padding: 6px 10px; font-size: 13px; }
+.btn:active { transform: scale(0.96); }
+.container { padding: 12px; max-width: 900px; margin: 0 auto; }
+.card { background: #fff; border-radius: 12px; padding: 12px; margin-bottom: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+input, select { padding: 8px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px;
+  width: 100%; }
+label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
+
+/* スコアボード */
+.scoreboard { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center;
+  background: #263238; color: #fff; padding: 10px; border-radius: 12px; margin-bottom: 12px; }
+.team-name { font-size: 14px; text-align: center; opacity: 0.85; }
+.team-score { font-size: 56px; font-weight: bold; text-align: center; line-height: 1; }
+.vs { font-size: 14px; opacity: 0.6; }
+.qinfo { text-align: center; font-size: 13px; padding: 6px; background: #455a64; color: #fff;
+  border-radius: 8px; margin-bottom: 12px; }
+
+/* 選手ボタングリッド */
+.team-block { margin-bottom: 14px; }
+.team-block h3 { margin: 4px 0 8px; font-size: 14px; color: #1565c0; }
+.player-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.player-btn { background: #fff; border: 2px solid #1976d2; border-radius: 10px;
+  padding: 8px 4px; text-align: center; font-size: 13px; cursor: pointer; }
+.player-btn .num { font-size: 22px; font-weight: bold; color: #1976d2; }
+.player-btn .name { font-size: 11px; color: #555; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.player-btn.selected { background: #1976d2; }
+.player-btn.selected .num, .player-btn.selected .name { color: #fff; }
+
+/* 得点ボタン */
+.point-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
+.point-bar .btn { font-size: 18px; padding: 14px 0; }
+
+/* 履歴 */
+.history { max-height: 200px; overflow-y: auto; font-size: 12px; }
+.history div { padding: 4px 6px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+.history .undo { color: #d32f2f; cursor: pointer; font-weight: bold; }
+
+/* タブ */
+.tabs { display: flex; background: #fff; border-radius: 12px; margin-bottom: 12px; overflow: hidden; }
+.tabs button { flex: 1; padding: 10px; background: #fff; border: none; font-size: 14px; cursor: pointer; }
+.tabs button.active { background: #1976d2; color: #fff; }
+
+/* 試合一覧 */
+.game-row { display: flex; justify-content: space-between; align-items: center;
+  padding: 10px; border-bottom: 1px solid #eee; }
+.game-row:last-child { border-bottom: none; }
+.game-row .meta { font-size: 12px; color: #666; }
+
+/* 選手登録 */
+.player-row { display: grid; grid-template-columns: 60px 1fr 80px 30px; gap: 6px;
+  margin-bottom: 6px; align-items: center; }
+
+/* ファウル表示 */
+.foul-badge { display: inline-block; background: #ffebee; color: #c62828;
+  font-size: 10px; padding: 1px 4px; border-radius: 3px; margin-left: 2px; }
+
+/* モーダル */
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;
+  align-items: center; justify-content: center; z-index: 100; }
+.modal { background: #fff; border-radius: 12px; padding: 16px; width: 90%; max-width: 400px; }
