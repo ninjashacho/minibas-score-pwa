@@ -6,9 +6,12 @@ const FONTKIT_URL = 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fo
 const OFFICIAL_PDF_URL = 'MINI_scoresheet_20190401.pdf';
 const PDF_FONT_URL = 'NotoSansJP-VF.ttf';
 const DEFAULT_DB = { games: [], currentGameId: null, ownTeam: emptyTeam('') };
+const REGULAR_Q_MS = 6 * 60 * 1000;
+const OT_Q_MS = 3 * 60 * 1000;
 let db = JSON.parse(localStorage.getItem(DB_KEY) || 'null') || structuredClone(DEFAULT_DB);
 let xlsxLoadPromise = null;
 let pdfLibLoadPromise = null;
+let tickTimer = null;
 function save() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 normalizeDb();
@@ -26,8 +29,9 @@ function newGame() {
       B: emptyTeam('Bチーム')
     },
     quarter: 1,                   // 1-4, 5+はOT
+    clock: newClock(),
     selected: { team: null, no: null },
-    events: [],                   // {id,t,team,no,type:'score'|'foul'|'play'|'to',pts,q}
+    events: [],                   // {id,t,team,no,type:'score'|'miss'|'assist'|'rebound'|'foul'|'play'|'subout'|'to',pts,q,ms}
     timeouts: { A: [0,0,0,0], B: [0,0,0,0] }, // Qごと
   };
 }
@@ -42,6 +46,27 @@ function normalizeDb() {
   if (!Array.isArray(db.games)) db.games = [];
   if (!('currentGameId' in db)) db.currentGameId = null;
   db.ownTeam = normalizeTeam(db.ownTeam, '');
+  db.games.forEach(normalizeGame);
+}
+
+function normalizeGame(g) {
+  if (!g.clock) g.clock = newClock();
+  if (!g.clock.elapsedByQ) g.clock.elapsedByQ = {};
+  for (let q = 1; q <= 8; q++) {
+    if (typeof g.clock.elapsedByQ[q] !== 'number') g.clock.elapsedByQ[q] = 0;
+  }
+  if (typeof g.clock.running !== 'boolean') g.clock.running = false;
+  if (!g.clock.runningQ) g.clock.runningQ = g.quarter || 1;
+  if (!Array.isArray(g.events)) g.events = [];
+}
+
+function newClock() {
+  return {
+    running: false,
+    startedAt: null,
+    runningQ: 1,
+    elapsedByQ: { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0 }
+  };
 }
 
 function normalizeTeam(team, fallbackName) {
@@ -72,12 +97,15 @@ function hasOwnTeam() {
 let view = 'home';
 function render() {
   const root = document.getElementById('app');
+  const g = currentGame();
+  if (g) normalizeGame(g);
   if (view === 'home')   root.innerHTML = renderHome();
   if (view === 'own')    root.innerHTML = renderOwnTeam();
   if (view === 'setup')  root.innerHTML = renderSetup();
   if (view === 'play')   root.innerHTML = renderPlay();
   if (view === 'export') root.innerHTML = renderExport();
   bindEvents();
+  scheduleTick();
 }
 
 // ===== ホーム画面 =====
@@ -202,15 +230,19 @@ function renderSetup() {
 function renderPlay() {
   const g = currentGame();
   const qlabel = g.quarter <= 4 ? `第${g.quarter}Q` : `OT${g.quarter-4}`;
+  const elapsed = getQuarterElapsed(g);
+  const duration = getQuarterDuration(g.quarter);
 
   const playerBtns = (team) => g.teams[team].players.map(p => {
     const sel = g.selected.team===team && g.selected.no===p.no ? 'selected' : '';
-    const pts = getPlayerPoints(g, team, p.no);
-    const fouls = getPlayerFouls(g, team, p.no);
+    const stats = getPlayerStats(g, team, p.no);
+    const on = isPlayerOnCourt(g, team, p.no);
     return `<div class="player-btn ${sel}" data-act="sel" data-t="${team}" data-no="${esc(p.no)}">
       <div class="num">${esc(p.no)}</div>
       <div class="name">${esc(p.name)}</div>
-      <div style="font-size:11px;color:${sel?'#fff':'#888'}">${pts}P${fouls?`<span class="foul-badge">F${fouls}</span>`:''}</div>
+      <div class="player-mini" style="color:${sel?'#fff':'#888'}">
+        ${stats.pts}P ${formatMsShort(stats.playMs)}${on?'<span class="on-badge">ON</span>':''}${stats.fouls?`<span class="foul-badge">F${stats.fouls}</span>`:''}
+      </div>
     </div>`;
   }).join('');
 
@@ -218,7 +250,7 @@ function renderPlay() {
     const t = g.teams[e.team];
     const pl = e.no ? t.players.find(p => p.no===e.no) : null;
     const name = e.no ? (pl ? `#${pl.no} ${pl.name}` : `#${e.no}`) : '';
-    const label = e.type==='score'? `${e.pts}点` : e.type==='foul'? 'ファウル' : e.type==='play'? '出場' : 'T.O.';
+    const label = eventLabel(e);
     return `<div><span>Q${e.q} ${t.name} ${name} ${label}</span>
       <span class="undo" data-act="undo" data-id="${e.id}">取消</span></div>`;
   }).join('');
@@ -242,6 +274,16 @@ function renderPlay() {
         　${qlabel}　
         <button class="btn small gray" data-act="qnext">▶</button>
       </div>
+      <div class="clock-panel">
+        <div>
+          <div class="clock-time">${formatClock(elapsed)}</div>
+          <div class="clock-meta">${formatClock(duration)} / ${g.clock.running ? '計測中' : '停止中'}</div>
+        </div>
+        <div class="clock-actions">
+          <button class="btn small ${g.clock.running ? 'red' : 'green'}" data-act="clockToggle">${g.clock.running ? '停止' : '開始'}</button>
+          <button class="btn small gray" data-act="clockReset">リセット</button>
+        </div>
+      </div>
 
       ${['A','B'].map(t => `
         <div class="card team-block">
@@ -254,13 +296,21 @@ function renderPlay() {
           ${g.selected.no ? `選択中：${g.selected.team}チーム #${g.selected.no}` : '↑ 先に選手を選んでください'}
         </div>
         <div class="point-bar">
-          <button class="btn green" data-act="pt" data-p="1">+1</button>
+          <button class="btn green" data-act="pt" data-p="1">FT +1</button>
           <button class="btn green" data-act="pt" data-p="2">+2</button>
           <button class="btn green" data-act="pt" data-p="3">+3</button>
           <button class="btn red"   data-act="foul">ファウル</button>
         </div>
-        <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          <button class="btn" data-act="playin">出場記録</button>
+        <div class="stat-bar">
+          <button class="btn gray" data-act="miss" data-p="1">FT ×</button>
+          <button class="btn gray" data-act="miss" data-p="2">2点 ×</button>
+          <button class="btn gray" data-act="miss" data-p="3">3点 ×</button>
+          <button class="btn" data-act="assist">アシスト</button>
+          <button class="btn" data-act="rebound">リバウンド</button>
+        </div>
+        <div class="sub-bar">
+          <button class="btn" data-act="playin">出場</button>
+          <button class="btn red" data-act="subout">交代</button>
           <button class="btn gray" data-act="clearSel">選択解除</button>
         </div>
         <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
@@ -330,7 +380,7 @@ function getPlayerFouls(g, team, no) {
 }
 function getPlayerQuarterSet(g, team, no) {
   return new Set(g.events
-    .filter(e => e.team===team && e.no===no && e.q<=4 && ['play','score','foul'].includes(e.type))
+    .filter(e => e.team===team && e.no===no && e.q<=4 && ['play','subout','score','miss','assist','rebound','foul'].includes(e.type))
     .map(e => e.q));
 }
 function getPlayerFoulEvents(g, team, no) {
@@ -338,6 +388,119 @@ function getPlayerFoulEvents(g, team, no) {
 }
 function getTeamFoulsByQ(g, team, q) {
   return g.events.filter(e => e.team===team && e.type==='foul' && e.q===q).length;
+}
+function getPlayerStats(g, team, no) {
+  const ev = g.events.filter(e => e.team===team && e.no===no);
+  const made = ev.filter(e => e.type==='score');
+  const miss = ev.filter(e => e.type==='miss');
+  const ftm = made.filter(e => e.pts===1).length;
+  const fta = ftm + miss.filter(e => e.pts===1).length;
+  const fg2m = made.filter(e => e.pts===2).length;
+  const fg2a = fg2m + miss.filter(e => e.pts===2).length;
+  const fg3m = made.filter(e => e.pts===3).length;
+  const fg3a = fg3m + miss.filter(e => e.pts===3).length;
+  const fgm = fg2m + fg3m;
+  const fga = fg2a + fg3a;
+  return {
+    pts: made.reduce((s,e)=>s+e.pts,0),
+    ftm, fta, fg2m, fg2a, fg3m, fg3a, fgm, fga,
+    ast: ev.filter(e => e.type==='assist').length,
+    reb: ev.filter(e => e.type==='rebound').length,
+    fouls: ev.filter(e => e.type==='foul').length,
+    playMs: getPlayerPlayMs(g, team, no)
+  };
+}
+function getTeamStats(g, team) {
+  const players = g.teams[team].players;
+  return players.reduce((sum, p) => {
+    const s = getPlayerStats(g, team, p.no);
+    ['pts','ftm','fta','fg2m','fg2a','fg3m','fg3a','fgm','fga','ast','reb','fouls','playMs'].forEach(k => sum[k] += s[k] || 0);
+    return sum;
+  }, {pts:0,ftm:0,fta:0,fg2m:0,fg2a:0,fg3m:0,fg3a:0,fgm:0,fga:0,ast:0,reb:0,fouls:0,playMs:0});
+}
+function pct(made, attempts) {
+  return attempts ? Math.round((made / attempts) * 100) + '%' : '-';
+}
+function isPlayerOnCourt(g, team, no) {
+  const last = g.events
+    .filter(e => e.team===team && e.no===no && ['play','subout'].includes(e.type))
+    .sort((a,b)=>a.t-b.t).at(-1);
+  return last?.type === 'play';
+}
+function getPlayerPlayMs(g, team, no) {
+  let total = 0;
+  for (let q = 1; q <= 8; q++) {
+    const events = g.events
+      .filter(e => e.team===team && e.no===no && e.q===q && ['play','subout'].includes(e.type))
+      .sort((a,b)=>a.t-b.t);
+    let start = null;
+    events.forEach(e => {
+      const ms = typeof e.ms === 'number' ? e.ms : 0;
+      if (e.type === 'play' && start === null) start = ms;
+      if (e.type === 'subout' && start !== null) {
+        total += Math.max(0, ms - start);
+        start = null;
+      }
+    });
+    if (start !== null) total += Math.max(0, getQuarterEndMs(g, q) - start);
+  }
+  return total;
+}
+function getQuarterDuration(q) {
+  return q <= 4 ? REGULAR_Q_MS : OT_Q_MS;
+}
+function getQuarterElapsed(g, q = g.quarter) {
+  normalizeGame(g);
+  let elapsed = g.clock.elapsedByQ[q] || 0;
+  if (g.clock.running && g.clock.runningQ === q && g.clock.startedAt) {
+    elapsed += Date.now() - g.clock.startedAt;
+  }
+  return Math.min(elapsed, getQuarterDuration(q));
+}
+function getQuarterEndMs(g, q) {
+  const stored = getQuarterElapsed(g, q);
+  const maxEvent = Math.max(0, ...g.events.filter(e => e.q===q && typeof e.ms === 'number').map(e => e.ms));
+  return Math.max(stored, maxEvent);
+}
+function syncClock(g) {
+  normalizeGame(g);
+  if (g.clock.running && g.clock.startedAt) {
+    const q = g.clock.runningQ || g.quarter;
+    g.clock.elapsedByQ[q] = Math.min(getQuarterDuration(q), (g.clock.elapsedByQ[q] || 0) + Date.now() - g.clock.startedAt);
+  }
+  g.clock.running = false;
+  g.clock.startedAt = null;
+}
+function eventMs(g) {
+  return getQuarterElapsed(g);
+}
+function formatClock(ms) {
+  const total = Math.floor(ms / 1000);
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${min}:${String(sec).padStart(2,'0')}`;
+}
+function formatMsShort(ms) {
+  const min = Math.floor(ms / 60000);
+  const sec = Math.floor((ms % 60000) / 1000);
+  return `${min}:${String(sec).padStart(2,'0')}`;
+}
+function eventLabel(e) {
+  if (e.type === 'score') return e.pts===1 ? 'FT成功' : `${e.pts}点成功`;
+  if (e.type === 'miss') return e.pts===1 ? 'FTミス' : `${e.pts}点ミス`;
+  if (e.type === 'assist') return 'アシスト';
+  if (e.type === 'rebound') return 'リバウンド';
+  if (e.type === 'foul') return 'ファウル';
+  if (e.type === 'play') return '出場';
+  if (e.type === 'subout') return '交代';
+  return 'T.O.';
+}
+function scheduleTick() {
+  if (tickTimer) clearInterval(tickTimer);
+  const g = currentGame();
+  if (view === 'play' && g?.clock?.running) {
+    tickTimer = setInterval(render, 1000);
+  }
 }
 
 // ===== イベントバインド =====
@@ -389,31 +552,60 @@ function handle(e) {
 
     case 'sel': g.selected = { team: el.dataset.t, no: el.dataset.no }; save(); break;
     case 'clearSel': g.selected = { team: null, no: null }; save(); break;
+    case 'clockToggle':
+      if (g.clock.running) syncClock(g);
+      else { g.clock.running = true; g.clock.startedAt = Date.now(); g.clock.runningQ = g.quarter; }
+      save();
+      break;
+    case 'clockReset':
+      if (confirm(`${g.quarter <= 4 ? `第${g.quarter}Q` : `OT${g.quarter-4}`}の時計をリセットしますか？`)) {
+        g.clock.running = false;
+        g.clock.startedAt = null;
+        g.clock.elapsedByQ[g.quarter] = 0;
+        save();
+      }
+      break;
     case 'playin':
       if (!g.selected.no) { alert('先に選手を選んでください'); return; }
       if (g.quarter > 4) { alert('出場時限は1Q〜4Qに記録します'); return; }
-      if (!g.events.some(x => x.team===g.selected.team && x.no===g.selected.no && x.type==='play' && x.q===g.quarter)) {
-        g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no, type:'play', q:g.quarter});
+      if (!isPlayerOnCourt(g, g.selected.team, g.selected.no)) {
+        g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no, type:'play', q:g.quarter, ms:eventMs(g)});
+        save();
+      }
+      break;
+    case 'subout':
+      if (!g.selected.no) { alert('先に選手を選んでください'); return; }
+      if (isPlayerOnCourt(g, g.selected.team, g.selected.no)) {
+        g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no, type:'subout', q:g.quarter, ms:eventMs(g)});
         save();
       }
       break;
     case 'pt':
       if (!g.selected.no) { alert('先に選手を選んでください'); return; }
       g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no,
-                     type:'score', pts:+el.dataset.p, q:g.quarter}); save(); break;
+                     type:'score', pts:+el.dataset.p, q:g.quarter, ms:eventMs(g)}); save(); break;
+    case 'miss':
+      if (!g.selected.no) { alert('先に選手を選んでください'); return; }
+      g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no,
+                     type:'miss', pts:+el.dataset.p, q:g.quarter, ms:eventMs(g)}); save(); break;
+    case 'assist':
+    case 'rebound':
+      if (!g.selected.no) { alert('先に選手を選んでください'); return; }
+      g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no,
+                     type:act, q:g.quarter, ms:eventMs(g)}); save(); break;
     case 'foul':
       if (!g.selected.no) { alert('先に選手を選んでください'); return; }
       g.events.push({id:uid(), t:Date.now(), team:g.selected.team, no:g.selected.no,
-                     type:'foul', q:g.quarter}); save(); break;
+                     type:'foul', q:g.quarter, ms:eventMs(g)}); save(); break;
     case 'toA': case 'toB': {
       const team = act==='toA'?'A':'B';
       const idx = Math.min(g.quarter-1, 3);
       g.timeouts[team][idx] = (g.timeouts[team][idx]||0) + 1;
-      g.events.push({id:uid(), t:Date.now(), team, type:'to', q:g.quarter}); save(); break;
+      g.events.push({id:uid(), t:Date.now(), team, type:'to', q:g.quarter, ms:eventMs(g)}); save(); break;
     }
     case 'undo': g.events = g.events.filter(x => x.id !== el.dataset.id); save(); break;
-    case 'qprev': if (g.quarter>1){g.quarter--; save();} break;
-    case 'qnext': if (g.quarter<8){g.quarter++; save();} break;
+    case 'qprev': if (g.quarter>1){syncClock(g); g.quarter--; save();} break;
+    case 'qnext': if (g.quarter<8){syncClock(g); g.quarter++; save();} break;
 
     case 'xlsx': exportXlsx(g); return;
     case 'officialpdf': exportOfficialPdf(g); return;
@@ -680,6 +872,8 @@ function buildScoreSheetHtml(g) {
   }));
   const otA = g.events.filter(e => e.team==='A' && e.type==='score' && e.q > 4).reduce((s,e)=>s+e.pts, 0);
   const otB = g.events.filter(e => e.team==='B' && e.type==='score' && e.q > 4).reduce((s,e)=>s+e.pts, 0);
+  const teamAStats = getTeamStats(g, 'A');
+  const teamBStats = getTeamStats(g, 'B');
 
   return `<!DOCTYPE html>
 <html lang="ja">
@@ -707,7 +901,7 @@ body { margin: 0; color: #111; font-family: -apple-system, "Hiragino Sans", "Yu 
 .team-title { background: #111; color: #fff; padding: 1.5mm 2mm; display: flex; justify-content: space-between; font-weight: 900; }
 .team-title strong { color: #ffb4c4; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-th, td { border: 1px solid #111; padding: 1mm; font-size: 8.5px; text-align: center; height: 6.5mm; overflow: hidden; }
+th, td { border: 1px solid #111; padding: 0.8mm; font-size: 7.2px; text-align: center; height: 6.2mm; overflow: hidden; }
 th { background: #f3f3f3; font-weight: 800; }
 td.name { text-align: left; font-size: 8px; }
 .summary { border: 2px solid #111; }
@@ -719,6 +913,9 @@ td.name { text-align: left; font-size: 8px; }
 .running-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; }
 .running-grid table:first-child { border-right: 2px solid #111; }
 .running td, .running th { height: 5.4mm; font-size: 7.5px; padding: 0.6mm; }
+.sub-log { margin-top: 3mm; border: 2px solid #111; }
+.sub-log h2 { margin: 0; background: #c8102e; color: #fff; padding: 1.5mm 2mm; font-size: 11px; }
+.sub-log td, .sub-log th { height: 5.2mm; font-size: 7px; padding: 0.5mm; }
 .sign { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2mm; margin-top: 3mm; font-size: 8px; }
 .sign div { border: 1px solid #111; min-height: 9mm; padding: 1mm; }
 .no-print { position: fixed; right: 12px; top: 12px; display: flex; gap: 8px; }
@@ -773,12 +970,19 @@ td.name { text-align: left; font-size: 8px; }
         <tr><th>A</th>${[0,1,2,3].map(i=>`<td>${g.timeouts.A[i]||0}</td>`).join('')}</tr>
         <tr><th>B</th>${[0,1,2,3].map(i=>`<td>${g.timeouts.B[i]||0}</td>`).join('')}</tr>
       </table>
+      <h2>チームスタッツ</h2>
+      <table>
+        <tr><th></th><th>FG</th><th>3P</th><th>FT</th><th>AST</th><th>REB</th></tr>
+        <tr><th>A</th><td>${pct(teamAStats.fgm,teamAStats.fga)}</td><td>${pct(teamAStats.fg3m,teamAStats.fg3a)}</td><td>${pct(teamAStats.ftm,teamAStats.fta)}</td><td>${teamAStats.ast}</td><td>${teamAStats.reb}</td></tr>
+        <tr><th>B</th><td>${pct(teamBStats.fgm,teamBStats.fga)}</td><td>${pct(teamBStats.fg3m,teamBStats.fg3a)}</td><td>${pct(teamBStats.ftm,teamBStats.fta)}</td><td>${teamBStats.ast}</td><td>${teamBStats.reb}</td></tr>
+      </table>
       <div class="win">勝者<br><b>${getScore(g,'A')===getScore(g,'B') ? '' : esc(getScore(g,'A') > getScore(g,'B') ? g.teams.A.name : g.teams.B.name)}</b></div>
     </aside>
     ${teamSheet(g, 'B')}
   </section>
 
   ${runningScoreSheet(g)}
+  ${substitutionSheet(g)}
 
   <section class="sign">
     <div>スコアラー</div>
@@ -797,19 +1001,27 @@ function sheetField(label, value) {
 
 function teamSheet(g, team) {
   const t = g.teams[team];
-  const rows = Array.from({length: 15}, (_, i) => t.players[i] || { no:'', name:'', license:'' }).map(p => `
-    <tr>
+  const rows = Array.from({length: 15}, (_, i) => t.players[i] || { no:'', name:'', license:'' }).map(p => {
+    const s = p.no ? getPlayerStats(g, team, p.no) : null;
+    return `<tr>
       <td>${esc(p.no)}</td>
-      <td class="name">${esc(p.name)}</td>
       <td>${esc(p.license || '')}</td>
-      <td>${p.no ? getPlayerPoints(g,team,p.no) : ''}</td>
-      <td>${p.no ? getPlayerFouls(g,team,p.no) : ''}</td>
-    </tr>`).join('');
+      <td class="name">${esc(p.name)}</td>
+      <td>${s ? formatMsShort(s.playMs) : ''}</td>
+      <td>${s ? s.pts : ''}</td>
+      <td>${s ? `${s.fgm}/${s.fga}` : ''}</td>
+      <td>${s ? `${s.fg3m}/${s.fg3a}` : ''}</td>
+      <td>${s ? `${s.ftm}/${s.fta}` : ''}</td>
+      <td>${s ? s.ast : ''}</td>
+      <td>${s ? s.reb : ''}</td>
+      <td>${s ? s.fouls : ''}</td>
+    </tr>`;
+  }).join('');
 
   return `<div class="team-box">
     <div class="team-title"><span>${team}チーム</span><strong>${esc(t.name)}</strong></div>
     <table>
-      <tr><th style="width:12mm">No</th><th>氏名</th><th style="width:16mm">ID下3</th><th style="width:14mm">得点</th><th style="width:12mm">F</th></tr>
+      <tr><th style="width:8mm">No</th><th style="width:12mm">ID</th><th>氏名</th><th style="width:13mm">MIN</th><th style="width:10mm">PTS</th><th style="width:12mm">FG</th><th style="width:12mm">3P</th><th style="width:12mm">FT</th><th style="width:9mm">AST</th><th style="width:9mm">REB</th><th style="width:8mm">F</th></tr>
       ${rows}
     </table>
     <table>
@@ -817,6 +1029,24 @@ function teamSheet(g, team) {
       <tr><th>AC</th><td class="name">${esc(t.assistant)}</td></tr>
     </table>
   </div>`;
+}
+
+function substitutionSheet(g) {
+  const rows = g.events
+    .filter(e => ['play','subout'].includes(e.type))
+    .sort((a,b)=>a.t-b.t)
+    .slice(0, 40)
+    .map(e => {
+      const p = g.teams[e.team].players.find(x => x.no === e.no);
+      return `<tr><td>Q${e.q}</td><td>${formatClock(e.ms || 0)}</td><td>${esc(g.teams[e.team].name)}</td><td>${esc(e.no)}</td><td class="name">${esc(p?.name || '')}</td><td>${e.type==='play'?'出場':'交代'}</td></tr>`;
+    }).join('');
+  return `<section class="sub-log">
+    <h2>出場・交代ログ</h2>
+    <table>
+      <tr><th style="width:12mm">Q</th><th style="width:18mm">時刻</th><th>チーム</th><th style="width:12mm">No</th><th>選手</th><th style="width:16mm">記録</th></tr>
+      ${rows || '<tr><td colspan="6">記録なし</td></tr>'}
+    </table>
+  </section>`;
 }
 
 function runningScoreSheet(g) {
@@ -1000,10 +1230,12 @@ function loadScript(src) {
 
 // ===== CSV =====
 function exportCsv(g) {
-  const rows = [['時刻','Q','チーム','種別','背番','得点']];
+  const rows = [['時刻','Q','経過','チーム','種別','背番','得点/試投','選手']];
   g.events.slice().sort((a,b)=>a.t-b.t).forEach(e=>{
+    const p = e.no ? g.teams[e.team]?.players.find(x => x.no === e.no) : null;
     rows.push([new Date(e.t).toLocaleString('ja-JP'), e.q,
-               g.teams[e.team]?.name||e.team, e.type, e.no||'', e.pts||'']);
+               formatClock(e.ms || 0), g.teams[e.team]?.name||e.team,
+               eventLabel(e), e.no||'', e.pts||'', p?.name || '']);
   });
   const csv = '\uFEFF' + rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   downloadBlob(csv, 'text/csv', `${g.info.date}_running_score.csv`);

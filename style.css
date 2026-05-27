@@ -45,6 +45,12 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
 .vs { font-size: 14px; opacity: 0.6; }
 .qinfo { text-align: center; font-size: 13px; padding: 6px; background: var(--team-black); color: #fff;
   border-radius: 999px; margin-bottom: 12px; border: 1px solid var(--team-red); }
+.clock-panel { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: #fff; border: 1px solid var(--team-line); border-radius: 8px; padding: 10px 12px;
+  margin-bottom: 12px; }
+.clock-time { font-size: 28px; line-height: 1; font-weight: 900; color: var(--team-black); }
+.clock-meta { font-size: 11px; color: #666; margin-top: 3px; }
+.clock-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* 選手ボタングリッド */
 .team-block { margin-bottom: 14px; }
@@ -56,12 +62,19 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
 .player-btn .num { font-size: 22px; font-weight: 900; color: var(--team-red); }
 .player-btn .name { font-size: 11px; color: #555; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
+.player-mini { font-size: 10px; display: flex; justify-content: center; align-items: center; gap: 3px; min-height: 14px; }
 .player-btn.selected { background: linear-gradient(180deg, #e3193b, var(--team-red)); border-color: var(--team-red-dark); }
 .player-btn.selected .num, .player-btn.selected .name { color: #fff; }
+.on-badge { display: inline-block; background: #111; color: #fff; font-size: 9px; padding: 1px 4px;
+  border-radius: 999px; margin-left: 2px; }
+.player-btn.selected .on-badge { background: #fff; color: var(--team-red); }
 
 /* 得点ボタン */
 .point-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
 .point-bar .btn { font-size: 18px; padding: 14px 0; }
+.stat-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 6px; }
+.stat-bar .btn { font-size: 13px; padding: 11px 0; }
+.sub-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 6px; }
 
 /* 履歴 */
 .history { max-height: 200px; overflow-y: auto; font-size: 12px; }
@@ -95,4 +108,6 @@ label { font-size: 12px; color: #555; display: block; margin-top: 6px; }
   .header { padding: 8px 10px; }
   .header-actions .btn { padding-left: 8px; padding-right: 8px; }
   .player-grid { grid-template-columns: repeat(4, 1fr); }
+  .stat-bar { grid-template-columns: repeat(3, 1fr); }
+  .clock-time { font-size: 24px; }
 }

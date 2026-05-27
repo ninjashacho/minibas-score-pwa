@@ -1,9 +1,9 @@
-const CACHE = 'minibas-v7';
+const CACHE = 'minibas-v8';
 const XLSX_URL = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
 const PDF_LIB_URL = 'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js';
 const FONTKIT_URL = 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js';
 const FILES = [
-  './','./index.html','./style.css?v=7','./app.js?v=7','./manifest.json',
+  './','./index.html','./style.css?v=8','./app.js?v=8','./manifest.json',
   './MINI_scoresheet_20190401.pdf','./NotoSansJP-VF.ttf'
 ];
 self.addEventListener('install', e => {
